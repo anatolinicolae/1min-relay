@@ -95,9 +95,11 @@ else:
     logger.warning("Memcached is not available. Using in-memory storage for rate limiting. Not-Recommended")
 
 
-ONE_MIN_API_URL = "https://api.1min.ai/api/features"
+ONE_MIN_API_URL = "https://api.1min.ai/api/features"          # legacy: image gen only
+ONE_MIN_CHAT_API_URL = "https://api.1min.ai/api/chat-with-ai"
+ONE_MIN_CHAT_STREAMING_URL = "https://api.1min.ai/api/chat-with-ai?isStreaming=true"
 ONE_MIN_CONVERSATION_API_URL = "https://api.1min.ai/api/conversations"
-ONE_MIN_CONVERSATION_API_STREAMING_URL = "https://api.1min.ai/api/features?isStreaming=true"
+ONE_MIN_CONVERSATION_API_STREAMING_URL = ONE_MIN_CHAT_STREAMING_URL
 ONE_MIN_ASSET_URL = "https://api.1min.ai/api/assets"
 
 # Define the models that are available for use
@@ -335,22 +337,24 @@ def conversation():
 
     if not image:
         payload = {
-            "type": "CHAT_WITH_AI",
+            "type": "UNIFY_CHAT_WITH_AI",
             "model": request_data.get('model', 'mistral-nemo'),
             "promptObject": {
                 "prompt": all_messages,
-                "isMixed": False,
-                "webSearch": False
+                "settings": {
+                    "historySettings": {"isMixed": False}
+                }
             }
         }
     else:
         payload = {
-            "type": "CHAT_WITH_IMAGE",
+            "type": "UNIFY_CHAT_WITH_AI",
             "model": request_data.get('model', 'mistral-nemo'),
             "promptObject": {
                 "prompt": all_messages,
-                "isMixed": False,
-                "imageList": image_paths
+                "attachments": {
+                    "images": image_paths
+                }
             }
         }
     
@@ -359,7 +363,7 @@ def conversation():
     if not request_data.get('stream', False):
         # Non-Streaming Response
         logger.debug("Non-Streaming AI Response")
-        response = requests.post(ONE_MIN_API_URL, json=payload, headers=headers)
+        response = requests.post(ONE_MIN_CHAT_API_URL, json=payload, headers=headers)
         response.raise_for_status()
         one_min_response = response.json()
         
@@ -372,7 +376,7 @@ def conversation():
     else:
         # Streaming Response
         logger.debug("Streaming AI Response")
-        response_stream = requests.post(ONE_MIN_CONVERSATION_API_STREAMING_URL, data=json.dumps(payload), headers=headers, stream=True)
+        response_stream = requests.post(ONE_MIN_CHAT_STREAMING_URL, data=json.dumps(payload), headers=headers, stream=True)
         if response_stream.status_code != 200:
             if response_stream.status_code == 401:
                 return ERROR_HANDLER(1020)
@@ -475,55 +479,65 @@ def set_response_headers(response):
     response.headers['X-Request-ID'] = str (uuid.uuid4())
 
 def stream_response(response, request_data, model, prompt_tokens):
-    all_chunks = ""
-    for chunk in response.iter_content(chunk_size=1024):
-        finish_reason = None
+    all_content = ""
+    completion_id = f"chatcmpl-{uuid.uuid4()}"
+    current_event = None
 
-        return_chunk = {
-            "id": f"chatcmpl-{uuid.uuid4()}",
-            "object": "chat.completion.chunk",
-            "created": int(time.time()),
-            "model": request_data.get('model', 'mistral-nemo'),
-            "choices": [
-                {
-                    "index": 0,
-                    "delta": {
-                        "content": chunk.decode('utf-8')
-                    },
-                    "finish_reason": finish_reason
+    for line in response.iter_lines():
+        if not line:
+            current_event = None
+            continue
+
+        line = line.decode('utf-8')
+
+        if line.startswith('event:'):
+            current_event = line[6:].strip()
+        elif line.startswith('data:'):
+            data_str = line[5:].strip()
+
+            if current_event == 'content':
+                try:
+                    data = json.loads(data_str)
+                    content = data.get('content', '')
+                    all_content += content
+                    chunk = {
+                        "id": completion_id,
+                        "object": "chat.completion.chunk",
+                        "created": int(time.time()),
+                        "model": model,
+                        "choices": [{
+                            "index": 0,
+                            "delta": {"content": content},
+                            "finish_reason": None
+                        }]
+                    }
+                    yield f"data: {json.dumps(chunk)}\n\n"
+                except (json.JSONDecodeError, KeyError):
+                    pass
+
+            elif current_event == 'done':
+                tokens = calculate_token(all_content)
+                logger.debug(f"Finished processing streaming response. Completion tokens: {str(tokens)}")
+                logger.debug(f"Total tokens: {str(tokens + prompt_tokens)}")
+                final_chunk = {
+                    "id": completion_id,
+                    "object": "chat.completion.chunk",
+                    "created": int(time.time()),
+                    "model": model,
+                    "choices": [{
+                        "index": 0,
+                        "delta": {"content": ""},
+                        "finish_reason": "stop"
+                    }],
+                    "usage": {
+                        "prompt_tokens": prompt_tokens,
+                        "completion_tokens": tokens,
+                        "total_tokens": tokens + prompt_tokens
+                    }
                 }
-            ]
-        }
-        all_chunks += chunk.decode('utf-8')
-        yield f"data: {json.dumps(return_chunk)}\n\n"
-        
-    tokens = calculate_token(all_chunks)
-    logger.debug(f"Finished processing streaming response. Completion tokens: {str(tokens)}")
-    logger.debug(f"Total tokens: {str(tokens + prompt_tokens)}")
-        
-    # Final chunk when iteration stops
-    final_chunk = {
-        "id": f"chatcmpl-{uuid.uuid4()}",
-        "object": "chat.completion.chunk",
-        "created": int(time.time()),
-        "model": request_data.get('model', 'mistral-nemo'),
-        "choices": [
-            {
-                "index": 0,
-                "delta": {
-                    "content": ""    
-                },
-                "finish_reason": "stop"
-            }
-        ],
-        "usage": {
-            "prompt_tokens": prompt_tokens,
-            "completion_tokens": tokens,
-            "total_tokens": tokens + prompt_tokens
-        }
-    }
-    yield f"data: {json.dumps(final_chunk)}\n\n"
-    yield "data: [DONE]\n\n"
+                yield f"data: {json.dumps(final_chunk)}\n\n"
+                yield "data: [DONE]\n\n"
+                return
 
 if __name__ == '__main__':
     internal_ip = socket.gethostbyname(socket.gethostname())
