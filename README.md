@@ -8,7 +8,7 @@
 - Discord for support and updates: https://discord.gg/GQd3DrxXyj
 - Donation: https://donate.stripe.com/00w4gB1NbdI60afcKPgMw00
 - Paid hosted version and perks: https://shop.kokodev.cc/products
-- GitHub repository: https://github.com/kokofixcomputers/1min-relay
+- GitHub repository: https://github.com/thundersquared/1min-relay
 
 ## Features
 - bolt.diy compatibility: Seamless integration with bolt.diy
@@ -36,7 +36,7 @@
 ### Bare-metal (local machine)
 - Prerequisites: Python 3.x, pip, Git
 - Clone the repository:
-  - git clone https://github.com/kokofixcomputers/1min-relay.git
+  - git clone https://github.com/thundersquared/1min-relay.git
 - Install dependencies:
   - pip install -r requirements.txt
 - Run:
@@ -47,7 +47,7 @@
 
 Pre-built images
 - Pull the image:
-  - docker pull kokofixcomputers/1min-relay:latest
+  - docker pull thundersquared/1min-relay:latest
 - Create a dedicated network (recommended for memcached communication):
   - docker network create 1min-relay-network
 - Start Memcached:
@@ -56,7 +56,7 @@ Pre-built images
   - docker run -d --name 1min-relay-container --network 1min-relay-network -p 5001:5001 \
     -e SUBSET_OF_ONE_MIN_PERMITTED_MODELS="mistral-nemo,gpt-4o-mini,deepseek-chat" \
     -e PERMIT_MODELS_FROM_SUBSET_ONLY=True \
-    kokofixcomputers/1min-relay:latest
+    thundersquared/1min-relay:latest
 
 Environment variables
 - SUBSET_OF_ONE_MIN_PERMITTED_MODELS: Subset of 1min.ai models to expose. Default: mistral-nemo,gpt-4o,deepseek-chat.
