@@ -271,8 +271,6 @@ def format_conversation_history(messages, new_input):
 def conversation():
     if request.method == 'OPTIONS':
         return handle_options_request()
-    image = False
-    
 
     auth_header = request.headers.get('Authorization')
     if not auth_header or not auth_header.startswith("Bearer "):
@@ -297,7 +295,6 @@ def conversation():
     if not user_input:
         return ERROR_HANDLER(1423)
 
-    # Check if user_input is a list and combine text if necessary
     image = False
     if isinstance(user_input, list):
         image_paths = []
@@ -309,15 +306,18 @@ def conversation():
                 if 'image_url' in item:
                     if request_data.get('model', 'mistral-nemo') not in vision_supported_models:
                         return ERROR_HANDLER(1044, request_data.get('model', 'mistral-nemo'))
-                    if item['image_url']['url'].startswith("data:image/png;base64,"):
-                        base64_image = item['image_url']['url'].split(",")[1]
-                        binary_data = base64.b64decode(base64_image)
+                    image_url = item['image_url']['url']
+                    if image_url.startswith("data:image/"):
+                        header, b64data = image_url.split(",", 1)
+                        mime_type = header.split(";")[0].split(":")[1]
+                        binary_data = base64.b64decode(b64data)
                     else:
-                        binary_data = requests.get(item['image_url']['url'])
-                        binary_data.raise_for_status()  # Raise an error for bad responses
-                        binary_data = BytesIO(binary_data.content)
+                        dl = requests.get(image_url)
+                        dl.raise_for_status()
+                        mime_type = dl.headers.get('Content-Type', 'image/png').split(';')[0]
+                        binary_data = BytesIO(dl.content)
                     files = {
-                        'asset': ("relay" + str(uuid.uuid4()), binary_data, 'image/png')
+                        'asset': ("relay" + str(uuid.uuid4()), binary_data, mime_type)
                     }
                     asset = requests.post(ONE_MIN_ASSET_URL, files=files, headers=headers)
                     asset.raise_for_status()  # Raise an error for bad responses
