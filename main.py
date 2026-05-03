@@ -159,13 +159,13 @@ image_generation_models = [
     "clipdrop",
     "midjourney",
     "midjourney_6_1",
-    # Learnardo
-    "6b645e3a-d64f-4341-a6d8-7a3690fbf042" # LEONARDO_PHOENIX
-    "b24e16ff-06e3-43eb-8d33-4416c2d75876" # LEONARDO_LIGHTNING_XL
-    "e71a1c2f-4f80-4800-934f-2c68979d8cc8" # LEONARDO_ANIME_XL
-    "1e60896f-3c26-4296-8ecc-53e2afecc132" # LEONARDO_DIFFUSION_XL
-    "aa77f04e-3eec-4034-9c07-d0f619684628" # LEONARDO_KINO_XL
-    "2067ae52-33fd-4a82-bb92-c2c55e7d2786" # LEONARDO_ALBEDO_BASE_XL
+    # Leonardo
+    "6b645e3a-d64f-4341-a6d8-7a3690fbf042", # LEONARDO_PHOENIX
+    "b24e16ff-06e3-43eb-8d33-4416c2d75876", # LEONARDO_LIGHTNING_XL
+    "e71a1c2f-4f80-4800-934f-2c68979d8cc8", # LEONARDO_ANIME_XL
+    "1e60896f-3c26-4296-8ecc-53e2afecc132", # LEONARDO_DIFFUSION_XL
+    "aa77f04e-3eec-4034-9c07-d0f619684628", # LEONARDO_KINO_XL
+    "2067ae52-33fd-4a82-bb92-c2c55e7d2786", # LEONARDO_ALBEDO_BASE_XL
     "black-forest-labs/flux-schnell",
 ]
 
@@ -301,9 +301,10 @@ def conversation():
     image = False
     if isinstance(user_input, list):
         image_paths = []
+        combined_texts = []
         for item in user_input:
             if 'text' in item:
-                combined_text = '\n'.join(item['text'])
+                combined_texts.append(item['text'])
             try:
                 if 'image_url' in item:
                     if request_data.get('model', 'mistral-nemo') not in vision_supported_models:
@@ -327,7 +328,7 @@ def conversation():
                 print(f"An error occurred e:" + str(e)[:60])
                 # Optionally log the error or return an appropriate response
 
-        user_input = str(combined_text)
+        user_input = '\n'.join(combined_texts)
 
     prompt_token = calculate_token(str(all_messages))
     if PERMIT_MODELS_FROM_SUBSET_ONLY and request_data.get('model', 'mistral-nemo') not in AVAILABLE_MODELS:
@@ -364,6 +365,8 @@ def conversation():
         # Non-Streaming Response
         logger.debug("Non-Streaming AI Response")
         response = requests.post(ONE_MIN_CHAT_API_URL, json=payload, headers=headers)
+        if response.status_code == 401:
+            return ERROR_HANDLER(1020)
         response.raise_for_status()
         one_min_response = response.json()
         
@@ -536,6 +539,27 @@ def stream_response(response, request_data, model, prompt_tokens):
                     }
                 }
                 yield f"data: {json.dumps(final_chunk)}\n\n"
+                yield "data: [DONE]\n\n"
+                return
+
+            elif current_event == 'error':
+                try:
+                    data = json.loads(data_str)
+                    logger.error(f"Upstream streaming error: {data}")
+                except (json.JSONDecodeError, KeyError):
+                    logger.error(f"Upstream streaming error: {data_str}")
+                error_chunk = {
+                    "id": completion_id,
+                    "object": "chat.completion.chunk",
+                    "created": int(time.time()),
+                    "model": model,
+                    "choices": [{
+                        "index": 0,
+                        "delta": {"content": ""},
+                        "finish_reason": "stop"
+                    }]
+                }
+                yield f"data: {json.dumps(error_chunk)}\n\n"
                 yield "data: [DONE]\n\n"
                 return
 
